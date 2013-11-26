@@ -76,6 +76,9 @@ static __initdata efi_config_table_type_t arch_tables[] = {
 	{NULL_GUID, NULL, NULL},
 };
 
+void *efi_runtime_map;
+int nr_efi_runtime_map;
+
 /*
  * Returns 1 if 'facility' is enabled, 0 otherwise.
  */
@@ -811,6 +814,21 @@ static void __init efi_merge_regions(void)
 	}
 }
 
+static int __init efi_save_runtime_map(efi_memory_desc_t *md)
+{
+	efi_runtime_map = krealloc(efi_runtime_map,
+			(nr_efi_runtime_map + 1) *
+			memmap.desc_size, GFP_KERNEL);
+	if (!efi_runtime_map)
+		return -ENOMEM;
+
+	memcpy(efi_runtime_map + nr_efi_runtime_map * memmap.desc_size,
+		md, memmap.desc_size);
+	nr_efi_runtime_map++;
+
+	return 0;
+}
+
 /*
  * Map efi memory ranges for runtime serivce and update new_memmap with virtual
  * addresses.
@@ -821,6 +839,7 @@ static void * __init efi_map_regions(int *count)
 	void *p, *new_memmap = NULL;
 	unsigned long size;
 	u64 end, systab;
+	int error = 0;
 
 	for (p = memmap.map; p < memmap.map_end; p += memmap.desc_size) {
 		md = p;
@@ -852,9 +871,16 @@ static void * __init efi_map_regions(int *count)
 
 		memcpy(new_memmap + (*count * memmap.desc_size), md,
 		       memmap.desc_size);
+		if (!error && md->type != EFI_BOOT_SERVICES_CODE &&
+				md->type != EFI_BOOT_SERVICES_DATA)
+			error = efi_save_runtime_map(md);
 		(*count)++;
 	}
 
+	if (error) {
+		nr_efi_runtime_map = 0;
+		kfree(efi_runtime_map);
+	}
 ret:
 	return new_memmap;
 }

@@ -872,4 +872,10 @@ int efivars_sysfs_init(void);
 
 #endif /* CONFIG_EFI_VARS */
 
+#ifdef CONFIG_EFI_RUNTIME_MAP
+extern void *efi_runtime_map;
+extern int nr_efi_runtime_map;
+extern struct kobject *efi_kobj;
+#endif
+
 #endif /* _LINUX_EFI_H */
