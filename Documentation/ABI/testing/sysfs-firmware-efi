@@ -1,0 +1,27 @@
+What:		/sys/firmware/efi/fw_vendor
+Date:		Nov 2013
+Contact:	Dave Young <dyoung@redhat.com>
+Description:
+		It shows the physical address of firmware vendor field in the
+		EFI system table.
+	
+Users:
+		Kexec
+
+What:		/sys/firmware/efi/runtime
+Date:		Nov 2013
+Contact:	Dave Young <dyoung@redhat.com>
+Description:
+		It shows the physical address of runtime service table entry in
+		the EFI system table.
+Users:
+		Kexec
+
+What:		/sys/firmware/efi/config_table
+Date:		Nov 2013
+Contact:	Dave Young <dyoung@redhat.com>
+Description:
+		It shows the physical address of config table entry in the EFI
+		system table.
+Users:
+		Kexec
