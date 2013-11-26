@@ -78,6 +78,7 @@ static __initdata efi_config_table_type_t arch_tables[] = {
 
 void *efi_runtime_map;
 int nr_efi_runtime_map;
+struct efi_setup_data *efi_setup;
 
 /*
  * Returns 1 if 'facility' is enabled, 0 otherwise.
@@ -115,6 +116,32 @@ static int __init setup_storage_paranoia(char *arg)
 }
 early_param("efi_no_storage_paranoia", setup_storage_paranoia);
 
+void __init parse_efi_setup(u64 phys_addr, u32 data_len)
+{
+	int size;
+	struct setup_data *sdata;
+	u64 efi_setup_phys;
+
+	if (!efi_enabled(EFI_64BIT)) {
+		pr_warn("SETUP_EFI not supported on 32-bit\n");
+		return;
+	}
+
+	sdata = early_memremap(phys_addr, data_len);
+	if (!sdata)
+		return;
+
+	size = data_len - sizeof(struct setup_data);
+
+	efi_setup_phys = phys_addr + sizeof(struct setup_data);
+
+	nr_efi_runtime_map = (size - sizeof(struct efi_setup_data)) /
+			sizeof(efi_memory_desc_t);
+	early_iounmap(sdata, data_len);
+
+	/* iounmap efi_setup in function efi_enter_virtual_mode */
+	efi_setup = early_memremap(efi_setup_phys, size);
+}
 
 static efi_status_t virt_efi_get_time(efi_time_t *tm, efi_time_cap_t *tc)
 {
@@ -504,8 +531,12 @@ static int __init efi_systab_init(void *phys)
 		}
 
 		efi_systab.hdr = systab64->hdr;
-		efi_systab.fw_vendor = systab64->fw_vendor;
-		tmp |= systab64->fw_vendor;
+
+		if (efi_setup)
+			efi_systab.fw_vendor = (unsigned long)efi_setup->fw_vendor;
+		else
+			efi_systab.fw_vendor = systab64->fw_vendor;
+		tmp |= efi_systab.fw_vendor;
 		efi_systab.fw_revision = systab64->fw_revision;
 		efi_systab.con_in_handle = systab64->con_in_handle;
 		tmp |= systab64->con_in_handle;
@@ -519,13 +550,21 @@ static int __init efi_systab_init(void *phys)
 		tmp |= systab64->stderr_handle;
 		efi_systab.stderr = systab64->stderr;
 		tmp |= systab64->stderr;
-		efi_systab.runtime = (void *)(unsigned long)systab64->runtime;
-		tmp |= systab64->runtime;
+		if (efi_setup)
+			efi_systab.runtime =
+				(void *)(unsigned long)efi_setup->runtime;
+		else
+			efi_systab.runtime =
+				(void *)(unsigned long)systab64->runtime;
+		tmp |= (unsigned long)efi_systab.runtime;
 		efi_systab.boottime = (void *)(unsigned long)systab64->boottime;
 		tmp |= systab64->boottime;
 		efi_systab.nr_tables = systab64->nr_tables;
-		efi_systab.tables = systab64->tables;
-		tmp |= systab64->tables;
+		if (efi_setup)
+			efi_systab.tables = (unsigned long)efi_setup->tables;
+		else
+			efi_systab.tables = systab64->tables;
+		tmp |= efi_systab.tables;
 
 		early_iounmap(systab64, sizeof(*systab64));
 #ifdef CONFIG_X86_32
@@ -631,6 +670,52 @@ static int __init efi_memmap_init(void)
 	return 0;
 }
 
+/*
+ * For kexec kernel there's some special config table entries which will be
+ * converted to virtual addresses after entering virtual mode. In kexec kernel
+ * we need the physical addresses instead, thus passing them via setup_data
+ * and update the entries to physical addresses in this function.
+ *
+ * Currently only handles smbios which is necessary for HP z420.
+ */
+static int __init efi_reuse_config(u64 tables, int nr_tables)
+{
+	void *p, *tablep;
+	int i, sz;
+
+	if (!efi_enabled(EFI_64BIT))
+		return 0;
+
+	if (!efi_setup->smbios)
+		return 0;
+
+	sz = sizeof(efi_config_table_64_t);
+
+	p = tablep = early_memremap(tables, nr_tables * sz);
+	if (!p) {
+		pr_err("Could not map Configuration table!\n");
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < efi.systab->nr_tables; i++) {
+		efi_guid_t guid;
+
+		guid = ((efi_config_table_64_t *)p)->guid;
+
+		/*
+		 * HP z420 workstation smbios will be convert to
+		 * virtual address after enter virtual mode.
+		 * Thus in case kexec/kdump the physical address
+		 * will be passed in setup_data.
+		 */
+		if (!efi_guidcmp(guid, SMBIOS_TABLE_GUID))
+			((efi_config_table_64_t *)p)->table = efi_setup->smbios;
+		p += sz;
+	}
+	early_iounmap(tablep, nr_tables * sz);
+	return 0;
+}
+
 void __init efi_init(void)
 {
 	efi_char16_t *c16;
@@ -675,6 +760,9 @@ void __init efi_init(void)
 	pr_info("EFI v%u.%.02u by %s\n",
 		efi.systab->hdr.revision >> 16,
 		efi.systab->hdr.revision & 0xffff, vendor);
+
+	if (efi_setup)
+		efi_reuse_config(efi.systab->tables, efi.systab->nr_tables);
 
 	if (efi_config_init(arch_tables))
 		return;
@@ -886,6 +974,45 @@ ret:
 }
 
 /*
+ * map efi regions which was passed via setup_data
+ * the virt_addr is a fixed addr which was used in
+ * 1st kernel of kexec boot.
+ */
+static void __init efi_map_regions_fixed(void)
+{
+	int i;
+	unsigned long size;
+	efi_memory_desc_t *md;
+	u64 end, systab;
+	void *p;
+
+	efi_runtime_map = kzalloc(nr_efi_runtime_map * memmap.desc_size,
+				GFP_KERNEL);
+	if (!efi_runtime_map)
+		pr_err("Out of memory, EFI runtime on nested kexec non-functional!\n");
+
+	p = efi_runtime_map;
+	md = efi_setup->map;
+	for (i = 0; i < nr_efi_runtime_map; i++) {
+		efi_map_region_fixed(md);
+		size = md->num_pages << PAGE_SHIFT;
+		end = md->phys_addr + size;
+
+		systab = (u64) (unsigned long) efi_phys.systab;
+		if (md->phys_addr <= systab && systab < end) {
+			systab += md->virt_addr - md->phys_addr;
+			efi.systab =
+				(efi_system_table_t *) (unsigned long) systab;
+		}
+		if (efi_runtime_map) {
+			memcpy(p, md, memmap.desc_size);
+			p += memmap.desc_size;
+		}
+		md += 1;
+	}
+}
+
+/*
  * This function will switch the EFI runtime services to virtual mode.
  * Essentially, we look through the EFI memmap and map every region that
  * has the runtime attribute bit set in its memory descriptor into the
@@ -901,6 +1028,10 @@ ret:
  * so that we're in a different address space when calling a runtime
  * function. For function arguments passing we do copy the PGDs of the
  * kernel page table into ->trampoline_pgd prior to each call.
+ *
+ * Specially for kexec boot efi runtime maps in previous kernel should
+ * be passed in via setup_data. In that case runtime ranges will be mapped
+ * to fixed virtual addresses exactly same as the ones in previous kernel.
  */
 void __init efi_enter_virtual_mode(void)
 {
@@ -919,12 +1050,15 @@ void __init efi_enter_virtual_mode(void)
 		return;
 	}
 
-	efi_merge_regions();
-
-	new_memmap = efi_map_regions(&count);
-	if (!new_memmap) {
-		pr_err("Error reallocating memory, EFI runtime non-functional!\n");
-		return;
+	if (efi_setup)
+		efi_map_regions_fixed();
+	else {
+		efi_merge_regions();
+		new_memmap = efi_map_regions(&count);
+		if (!new_memmap) {
+			pr_err("Error reallocating memory, EFI runtime non-functional!\n");
+			return;
+		}
 	}
 
 	BUG_ON(!efi.systab);
@@ -932,16 +1066,22 @@ void __init efi_enter_virtual_mode(void)
 	efi_setup_page_tables();
 	efi_sync_low_kernel_mappings();
 
-	status = phys_efi_set_virtual_address_map(
-		memmap.desc_size * count,
-		memmap.desc_size,
-		memmap.desc_version,
-		(efi_memory_desc_t *)__pa(new_memmap));
+	if (efi_setup)
+		early_iounmap(efi_setup, sizeof(struct efi_setup_data) +
+			      nr_efi_runtime_map *
+			      sizeof(efi_memory_desc_t));
+	else {
+		status = phys_efi_set_virtual_address_map(
+			memmap.desc_size * count,
+			memmap.desc_size,
+			memmap.desc_version,
+			(efi_memory_desc_t *)__pa(new_memmap));
 
-	if (status != EFI_SUCCESS) {
-		pr_alert("Unable to switch EFI into virtual mode "
-			 "(status=%lx)!\n", status);
-		panic("EFI call to SetVirtualAddressMap() failed!");
+		if (status != EFI_SUCCESS) {
+			pr_alert("Unable to switch EFI into virtual mode "
+				 "(status=%lx)!\n", status);
+			panic("EFI call to SetVirtualAddressMap() failed!");
+		}
 	}
 
 	/*
