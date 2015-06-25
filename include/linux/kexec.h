@@ -16,7 +16,7 @@
 
 #include <uapi/linux/kexec.h>
 
-#ifdef CONFIG_KEXEC
+#ifdef CONFIG_KEXEC_CORE
 #include <linux/list.h>
 #include <linux/linkage.h>
 #include <linux/compat.h>
@@ -279,7 +279,7 @@ extern int kexec_load_disabled;
 #endif
 
 /* List of defined/legal kexec flags */
-#ifndef CONFIG_KEXEC_JUMP
+#ifndef CONFIG_KEXEC_CORE_JUMP
 #define KEXEC_FLAGS    KEXEC_ON_CRASH
 #else
 #define KEXEC_FLAGS    (KEXEC_ON_CRASH | KEXEC_PRESERVE_CONTEXT)
@@ -326,7 +326,6 @@ int kimage_load_segment(struct kimage *image, struct kexec_segment *segment);
 void kimage_terminate(struct kimage *image);
 int kimage_is_destination_range(struct kimage *image,
 				unsigned long start, unsigned long end);
-
 extern struct mutex kexec_mutex;
 
 #ifdef CONFIG_KEXEC_FILE
@@ -335,12 +334,18 @@ void kimage_file_post_load_cleanup(struct kimage *image);
 static inline void kimage_file_post_load_cleanup(struct kimage *image) { }
 #endif /* CONFIG_KEXEC_FILE */
 
-#else /* !CONFIG_KEXEC */
+#ifdef CONFIG_KEXEC
+int kimage_alloc_init(struct kimage **rimage, unsigned long entry,
+			     unsigned long nr_segments,
+			     struct kexec_segment __user *segments,
+			     unsigned long flags);
+#endif
+#else /* !CONFIG_KEXEC_CORE */
 struct pt_regs;
 struct task_struct;
 static inline void crash_kexec(struct pt_regs *regs) { }
 static inline int kexec_should_crash(struct task_struct *p) { return 0; }
-#endif /* CONFIG_KEXEC */
+#endif /* CONFIG_KEXEC_CORE */
 
 #endif /* !defined(__ASSEBMLY__) */
 
