@@ -33,7 +33,7 @@ extern void oops_end(unsigned long, struct pt_regs *, int signr);
 extern int in_crash_kexec;
 #else
 /* no crash dump is ever in progress if no crash kernel can be kexec'd */
-#define in_crash_kexec 0
+#define in_crash_kexec (0)
 #endif
 
 #endif /* _ASM_X86_KDEBUG_H */
