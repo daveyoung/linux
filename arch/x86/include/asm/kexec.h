@@ -211,6 +211,14 @@ struct kexec_entry64_regs {
 typedef void crash_vmclear_fn(void);
 extern crash_vmclear_fn __rcu *crash_vmclear_loaded_vmcss;
 
-#endif /* __ASSEMBLY__ */
+#ifdef CONFIG_KEXEC_FILE
+extern int arch_update_purgatory(struct kimage *image);
+#else /* !CONFIG_KEXEC_FILE */
+static inline int arch_update_purgatory(struct kimage *image)
+{
+	return 0;
+}
+#endif /* CONFIG_KEXEC_FILE */
 
+#endif /* __ASSEMBLY__ */
 #endif /* _ASM_X86_KEXEC_H */
