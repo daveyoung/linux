@@ -9,6 +9,7 @@
 #include <linux/crash_core.h>
 #include <linux/utsname.h>
 #include <linux/vmalloc.h>
+#include <linux/sizes.h>
 
 #include <asm/page.h>
 #include <asm/sections.h>
@@ -143,6 +144,23 @@ static int __init parse_crashkernel_simple(char *cmdline,
 	return 0;
 }
 
+static unsigned long long __init
+get_crashkernel_default(unsigned long long system_ram)
+{
+	unsigned long long size = CONFIG_CRASHKERNEL_DEFAULT_MB;
+	unsigned long long threshold = CONFIG_CRASHKERNEL_DEFAULT_THRESHOLD_MB;
+
+	threshold *= SZ_1M;
+	size *= SZ_1M;
+
+	if (size >= system_ram || system_ram < threshold) {
+		pr_debug("crashkernel default size can not be used.\n");
+		return 0;
+	}
+
+	return size;
+}
+
 #define SUFFIX_HIGH 0
 #define SUFFIX_LOW  1
 #define SUFFIX_NULL 2
@@ -240,8 +258,15 @@ static int __init __parse_crashkernel(char *cmdline,
 	*crash_size = 0;
 	*crash_base = 0;
 
-	ck_cmdline = get_last_crashkernel(cmdline, name, suffix);
+	if (!strstr(cmdline, "crashkernel=")) {
+		*crash_size = get_crashkernel_default(system_ram);
+		if (!*crash_size)
+			return -EINVAL;
+		else
+			return 0;
+	}
 
+	ck_cmdline = get_last_crashkernel(cmdline, name, suffix);
 	if (!ck_cmdline)
 		return -EINVAL;
 

@@ -10,6 +10,22 @@ config KEXEC_CORE
 	select CRASH_CORE
 	bool
 
+config CRASHKERNEL_DEFAULT_THRESHOLD_MB
+	int "System memory size threshold for kdump memory default reserving"
+	depends on CRASH_CORE
+	default 0
+	help
+	  CRASHKERNEL_DEFAULT_MB is used as default crashkernel value if
+	  the system memory size is equal or bigger than the threshold.
+
+config CRASHKERNEL_DEFAULT_MB
+	int "Default crashkernel memory size reserved for kdump"
+	depends on CRASH_CORE
+	default 0
+	help
+	  This is used as the default kdump reserved memory size in MB.
+	  crashkernel=X kernel cmdline can overwrite this value.
+
 config HAVE_IMA_KEXEC
 	bool
 
